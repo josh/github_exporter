@@ -40,5 +40,4 @@ jobs:
           ./github_exporter generate
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITHUB_EXPORTER_OUTPUT: "-"
           GITHUB_EXPORTER_PUSHGATEWAY_URL: ${{ secrets.GH_EXPORTER_PUSHGATEWAY_URL }}
