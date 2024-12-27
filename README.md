@@ -1,28 +1,47 @@
-# GitHub Metrics Exporter
+# GitHub Prometheus Exporter
 
-A Prometheus metrics exporter for GitHub that collects various metrics from your GitHub account and repositories.
+A Prometheus exporter that collects metrics from GitHub, including:
 
-## Metrics Collected
-
-- Issue and Pull Request counts (open/closed) for each repository
-- Unread notification count
-- Workflow run statistics (latest run number and conclusion state)
+- Issue and pull request counts
+- Notification counts
+- Workflow run states and numbers
 
 ## Usage
 
-1. Set your GitHub token as an environment variable:
+The exporter requires a GitHub personal access token to function. Set it via the `GITHUB_TOKEN` environment variable or using the `--token` flag.
 
-   ```bash
-   export GITHUB_TOKEN=your_github_token
-   ```
+### Serve Mode
 
-2. Run the exporter:
-   ```bash
-   ./github_exporter
-   ```
+Run as a Prometheus metrics endpoint:
 
-The exporter will collect metrics and write them to `metrics.prom` in Prometheus text format.
+```bash
+github_exporter serve [options]
 
-## License
+Options:
+  -h, --host      Host address to listen on (default: ":9100")
+  -i, --interval  Metrics collection interval (default: 15m)
+```
 
-MIT License - See LICENSE file for details
+Metrics will be available at `http://localhost:9100/metrics`
+
+### Generate Mode
+
+Generate metrics once and exit:
+
+```bash
+github_exporter generate [options]
+
+Options:
+  -o, --output      Output file path (defaults to stdout if not specified)
+  -p, --pushgateway Pushgateway URL to send metrics to
+```
+
+### Environment Variables
+
+All CLI options can be configured via environment variables:
+
+- `GITHUB_TOKEN`: GitHub personal access token (required)
+- `GITHUB_EXPORTER_HOST`: Host address for serve mode
+- `GITHUB_EXPORTER_INTERVAL`: Collection interval for serve mode
+- `GITHUB_EXPORTER_OUTPUT`: Output file path for generate mode
+- `GITHUB_EXPORTER_PUSHGATEWAY`: Pushgateway URL for generate mode
