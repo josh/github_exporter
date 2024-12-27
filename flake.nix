@@ -26,6 +26,10 @@
         }
       );
 
+      checks = eachSystem (system: {
+        inherit (self.packages.${system}) prometheus-github-exporter;
+      });
+
       devShells = eachSystem (
         system:
         let
