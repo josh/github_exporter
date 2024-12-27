@@ -354,6 +354,7 @@ type serveCommand struct {
 
 type mainCommand struct {
 	Token    string           `arg:"-t,--token,required,env:GITHUB_TOKEN" placeholder:"TOKEN"`
+	Verbose  bool             `arg:"-v,--verbose,env:GITHUB_EXPORTER_VERBOSE" help:"Enable verbose logging"`
 	Generate *generateCommand `arg:"subcommand:generate"`
 	Serve    *serveCommand    `arg:"subcommand:serve"`
 }
@@ -368,7 +369,9 @@ func main() {
 		&oauth2.Token{AccessToken: args.Token},
 	)
 	httpClient := oauth2.NewClient(ctx, ts)
-	httpClient.Transport = &loggingRoundTripper{wrapped: httpClient.Transport}
+	if args.Verbose {
+		httpClient.Transport = &loggingRoundTripper{wrapped: httpClient.Transport}
+	}
 	client := github.NewClient(httpClient)
 
 	switch {

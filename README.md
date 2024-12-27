@@ -41,6 +41,7 @@ Options:
 All CLI options can be configured via environment variables:
 
 - `GITHUB_TOKEN`: GitHub personal access token (required)
+- `GITHUB_EXPORTER_VERBOSE`: Enable verbose logging
 - `GITHUB_EXPORTER_HOST`: Host address for serve mode
 - `GITHUB_EXPORTER_INTERVAL`: Collection interval for serve mode
 - `GITHUB_EXPORTER_OUTPUT`: Output file path for generate mode
