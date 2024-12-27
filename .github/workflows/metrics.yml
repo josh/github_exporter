@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  collect-metrics:
+  metrics:
     runs-on: ubuntu-latest
 
     steps:
