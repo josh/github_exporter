@@ -1,0 +1,29 @@
+name: Nix
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  id-token: "write"
+  contents: "read"
+
+env:
+  NIX_ABORT_ON_WARN: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - uses: DeterminateSystems/flake-checker-action@v9
+
+      - name: Check flake
+        run: |
+          nix flake check --print-build-logs
