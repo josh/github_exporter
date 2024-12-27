@@ -343,8 +343,8 @@ func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 type generateCommand struct {
-	Output      string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
-	Pushgateway url.URL `arg:"-p,--pushgateway,env:GITHUB_EXPORTER_PUSHGATEWAY" placeholder:"URL"`
+	Output         string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
+	PushgatewayURL url.URL `arg:"-p,--pushgateway-url,env:GITHUB_EXPORTER_PUSHGATEWAY_URL" placeholder:"URL"`
 }
 
 type serveCommand struct {
@@ -378,7 +378,7 @@ func main() {
 		}
 
 		// If no output or pushgateway is specified, write to stdout
-		if args.Generate.Output == "" && args.Generate.Pushgateway.String() == "" {
+		if args.Generate.Output == "" && args.Generate.PushgatewayURL.String() == "" {
 			args.Generate.Output = "-"
 		}
 
@@ -392,8 +392,8 @@ func main() {
 			}
 		}
 
-		if args.Generate.Pushgateway.String() != "" {
-			pusher := push.New(args.Generate.Pushgateway.String(), "github").Gatherer(registry)
+		if args.Generate.PushgatewayURL.String() != "" {
+			pusher := push.New(args.Generate.PushgatewayURL.String(), "github").Gatherer(registry)
 			if err := pusher.Push(); err != nil {
 				log.Fatalf("Error pushing metrics: %v", err)
 			}

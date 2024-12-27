@@ -44,4 +44,4 @@ All CLI options can be configured via environment variables:
 - `GITHUB_EXPORTER_HOST`: Host address for serve mode
 - `GITHUB_EXPORTER_INTERVAL`: Collection interval for serve mode
 - `GITHUB_EXPORTER_OUTPUT`: Output file path for generate mode
-- `GITHUB_EXPORTER_PUSHGATEWAY`: Pushgateway URL for generate mode
+- `GITHUB_EXPORTER_PUSHGATEWAY_URL`: Pushgateway URL for generate mode
