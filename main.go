@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"time"
 
+	"github.com/alexflint/go-arg"
 	"github.com/google/go-github/v68/github"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/push"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/errgroup"
@@ -314,25 +319,17 @@ func executeGraphQL(client *github.Client, ctx context.Context, query string, va
 	return json.NewDecoder(resp.Body).Decode(response)
 }
 
-func writeMetricsToFile(filename string) error {
-	gathering, err := registry.Gather()
+func writeToStdout(reg *prometheus.Registry) error {
+	enc := expfmt.NewEncoder(os.Stdout, expfmt.NewFormat(expfmt.TypeTextPlain))
+	mfs, err := reg.Gather()
 	if err != nil {
 		return err
 	}
-
-	var buf bytes.Buffer
-	for _, mf := range gathering {
-		_, err := expfmt.MetricFamilyToText(&buf, mf)
-		if err != nil {
+	for _, mf := range mfs {
+		if err := enc.Encode(mf); err != nil {
 			return err
 		}
 	}
-
-	err = os.WriteFile(filename, buf.Bytes(), 0644)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -341,30 +338,87 @@ type loggingRoundTripper struct {
 }
 
 func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	fmt.Printf("%s %s\n", req.Method, req.URL)
+	fmt.Fprintf(os.Stderr, "[%s] %s %s\n", time.Now().Format(time.RFC3339), req.Method, req.URL)
 	return l.wrapped.RoundTrip(req)
+}
+
+type generateCommand struct {
+	Output      string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
+	Pushgateway url.URL `arg:"-p,--pushgateway,env:GITHUB_EXPORTER_PUSHGATEWAY" placeholder:"URL"`
+}
+
+type serveCommand struct {
+	Host     string        `arg:"-h,--host,env:GITHUB_EXPORTER_HOST" default:":9100" placeholder:"HOST"`
+	Interval time.Duration `arg:"-i,--interval,env:GITHUB_EXPORTER_INTERVAL" default:"15m" placeholder:"INTERVAL"`
+}
+
+type mainCommand struct {
+	Token    string           `arg:"-t,--token,required,env:GITHUB_TOKEN" placeholder:"TOKEN"`
+	Generate *generateCommand `arg:"subcommand:generate"`
+	Serve    *serveCommand    `arg:"subcommand:serve"`
 }
 
 func main() {
 	ctx := context.Background()
 
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		log.Fatal("GITHUB_TOKEN environment variable is not set")
-	}
+	var args mainCommand
+	p := arg.MustParse(&args)
 
 	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: token},
+		&oauth2.Token{AccessToken: args.Token},
 	)
 	httpClient := oauth2.NewClient(ctx, ts)
 	httpClient.Transport = &loggingRoundTripper{wrapped: httpClient.Transport}
 	client := github.NewClient(httpClient)
 
-	if err := updateGitHubMetrics(client, ctx); err != nil {
-		log.Fatalf("Error fetching GitHub metrics: %v", err)
-	}
+	switch {
+	case args.Generate != nil:
+		if err := updateGitHubMetrics(client, ctx); err != nil {
+			log.Fatalf("Error fetching metrics: %v", err)
+		}
 
-	if err := writeMetricsToFile("metrics.prom"); err != nil {
-		log.Fatalf("Error writing metrics to file: %v", err)
+		// If no output or pushgateway is specified, write to stdout
+		if args.Generate.Output == "" && args.Generate.Pushgateway.String() == "" {
+			args.Generate.Output = "-"
+		}
+
+		if args.Generate.Output == "-" {
+			if err := writeToStdout(registry); err != nil {
+				log.Fatalf("Error writing metrics: %v", err)
+			}
+		} else if args.Generate.Output != "" {
+			if err := prometheus.WriteToTextfile(args.Generate.Output, registry); err != nil {
+				log.Fatalf("Error writing metrics: %v", err)
+			}
+		}
+
+		if args.Generate.Pushgateway.String() != "" {
+			pusher := push.New(args.Generate.Pushgateway.String(), "github").Gatherer(registry)
+			if err := pusher.Push(); err != nil {
+				log.Fatalf("Error pushing metrics: %v", err)
+			}
+		}
+
+	case args.Serve != nil:
+		go func() {
+			log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
+			if err := updateGitHubMetrics(client, ctx); err != nil {
+				log.Printf("[%s] Error fetching metrics: %v", time.Now().Format(time.RFC3339), err)
+			}
+
+			for range time.Tick(args.Serve.Interval) {
+				log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
+				if err := updateGitHubMetrics(client, ctx); err != nil {
+					log.Printf("[%s] Error fetching GitHub metrics: %v", time.Now().Format(time.RFC3339), err)
+				}
+			}
+		}()
+
+		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+		log.Fatal(http.ListenAndServe(args.Serve.Host, nil))
+
+	default:
+		p.WriteHelp(os.Stdout)
+		os.Exit(1)
 	}
 }

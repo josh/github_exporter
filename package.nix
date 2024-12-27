@@ -23,7 +23,7 @@ buildGoModule (
       "^go.sum$"
     ];
 
-    vendorHash = "sha256-SP4tQ+CFmdm+0Ww25IAFW5RL1EzUQsq1/LallwJ1ZT4=";
+    vendorHash = "sha256-TByHG/Fk20Bh9qI+tTwBFm47A0kb+SCc7hQ8s9RkwKk=";
 
     ldflags = [
       "-s"
