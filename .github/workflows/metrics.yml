@@ -36,7 +36,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: github_exporter
-          path: github_exporter
           github-token: ${{ secrets.GH_TOKEN }}
           run-id: ${{ steps.latest-go-run.outputs.run-id }}
 
