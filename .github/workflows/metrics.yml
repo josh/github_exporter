@@ -28,7 +28,8 @@ jobs:
             --status completed \
             --limit 1 \
             --json databaseId \
-            --jq '"run-id=\(.[0].databaseId)"' >>"$GITHUB_OUTPUT"
+            --jq '"run-id=\(.[0].databaseId)"' \
+          | tee -a "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
