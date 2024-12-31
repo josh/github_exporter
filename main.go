@@ -22,6 +22,10 @@ import (
 )
 
 var (
+	version = "0.0.0"
+)
+
+var (
 	registry = prometheus.NewRegistry()
 
 	issueCount = prometheus.NewGaugeVec(
@@ -353,17 +357,29 @@ type serveCommand struct {
 }
 
 type mainCommand struct {
-	Token    string           `arg:"-t,--token,required,env:GITHUB_TOKEN" placeholder:"TOKEN"`
+	Token    string           `arg:"-t,--token,env:GITHUB_TOKEN" placeholder:"TOKEN"`
 	Verbose  bool             `arg:"-v,--verbose,env:GITHUB_EXPORTER_VERBOSE" help:"Enable verbose logging"`
+	Version  bool             `arg:"-V,--version" help:"Print version information"`
 	Generate *generateCommand `arg:"subcommand:generate"`
 	Serve    *serveCommand    `arg:"subcommand:serve"`
 }
 
 func main() {
-	ctx := context.Background()
-
 	var args mainCommand
 	p := arg.MustParse(&args)
+
+	if args.Version {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
+	if args.Token == "" {
+		p.WriteUsage(os.Stderr)
+		fmt.Fprintln(os.Stderr, "error: --token is required (or environment variable GITHUB_TOKEN)")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
 
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: args.Token},
