@@ -19,8 +19,16 @@ jobs:
 
     steps:
       - name: Get latest Go workflow run number
+        id: latest-go-run
         run: |
-          gh run list --repo ${{ github.repository }} --workflow 'Go' --branch main --status completed --limit 1 --json number --jq '.[0].number'
+          gh run list \
+            --repo '${{ github.repository }}' \
+            --workflow 'Go' \
+            --branch main \
+            --status completed \
+            --limit 1 \
+            --json databaseId \
+            --jq '"run-id=\(.[0].databaseId)"' >>"$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
