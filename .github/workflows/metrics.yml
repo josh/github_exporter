@@ -18,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Get latest Go workflow run number
+        run: |
+          gh run list --workflow 'Go' --branch main --status completed --limit 1 --json number --jq '.[0].number'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
