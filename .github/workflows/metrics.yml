@@ -39,6 +39,10 @@ jobs:
           github-token: ${{ secrets.GH_TOKEN }}
           run-id: ${{ steps.latest-go-run.outputs.run-id }}
 
+      - name: Fix permissions
+        run: |
+          chmod +x ./github_exporter
+
       - name: Connect to Tailnet
         uses: tailscale/github-action@v3
         with:
