@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Get latest Go workflow run number
         run: |
-          gh run list --workflow 'Go' --branch main --status completed --limit 1 --json number --jq '.[0].number'
+          gh run list --repo ${{ github.repository }} --workflow 'Go' --branch main --status completed --limit 1 --json number --jq '.[0].number'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
