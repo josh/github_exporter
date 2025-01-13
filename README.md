@@ -34,6 +34,7 @@ github_exporter generate [options]
 Options:
   -o, --output      Output file path (defaults to stdout if not specified)
   -p, --pushgateway Pushgateway URL to send metrics to
+  -r, --pushgateway-retries Number of retries for Pushgateway requests (default: 1)
 ```
 
 ### Environment Variables
@@ -46,3 +47,4 @@ All CLI options can be configured via environment variables:
 - `GITHUB_EXPORTER_INTERVAL`: Collection interval for serve mode
 - `GITHUB_EXPORTER_OUTPUT`: Output file path for generate mode
 - `GITHUB_EXPORTER_PUSHGATEWAY_URL`: Pushgateway URL for generate mode
+- `GITHUB_EXPORTER_PUSHGATEWAY_RETRIES`: Number of retries for Pushgateway requests (default: 1)
