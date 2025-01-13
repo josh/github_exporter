@@ -52,7 +52,7 @@ jobs:
 
       - name: Push metrics to gateway
         run: |
-          ./github_exporter generate
+          ./github_exporter generate --pushgateway-retries=3
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_EXPORTER_PUSHGATEWAY_URL: ${{ secrets.GH_EXPORTER_PUSHGATEWAY_URL }}

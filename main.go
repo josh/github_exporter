@@ -347,8 +347,9 @@ func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 type generateCommand struct {
-	Output         string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
-	PushgatewayURL url.URL `arg:"-p,--pushgateway-url,env:GITHUB_EXPORTER_PUSHGATEWAY_URL" placeholder:"URL"`
+	Output             string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
+	PushgatewayURL     url.URL `arg:"-p,--pushgateway-url,env:GITHUB_EXPORTER_PUSHGATEWAY_URL" placeholder:"URL"`
+	PushgatewayRetries int     `arg:"-r,--pushgateway-retries,env:GITHUB_EXPORTER_PUSHGATEWAY_RETRIES" default:"1" placeholder:"RETRIES"`
 }
 
 type serveCommand struct {
@@ -413,8 +414,16 @@ func main() {
 
 		if args.Generate.PushgatewayURL.String() != "" {
 			pusher := push.New(args.Generate.PushgatewayURL.String(), "github").Gatherer(registry)
-			if err := pusher.Push(); err != nil {
-				log.Fatalf("Error pushing metrics: %v", err)
+			var err error
+			for i := 0; i < args.Generate.PushgatewayRetries; i++ {
+				if err = pusher.Push(); err == nil {
+					break
+				}
+				log.Printf("Error pushing metrics, retrying (%d/%d): %v", i+1, args.Generate.PushgatewayRetries, err)
+				time.Sleep(2 * time.Second)
+			}
+			if err != nil {
+				log.Fatalf("Error pushing metrics after %d retries: %v", args.Generate.PushgatewayRetries, err)
 			}
 		}
 
