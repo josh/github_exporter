@@ -43,16 +43,11 @@ jobs:
         run: |
           chmod +x ./github_exporter
 
-      - name: Connect to Tailnet
-        uses: tailscale/github-action@v3
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:github-actions
-
       - name: Push metrics to gateway
         run: |
-          ./github_exporter generate --pushgateway-retries=3
+          TS_HOSTNAME="github-exporter-$(cat /etc/hostname)" \
+            ./github_exporter generate --pushgateway-retries=3
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_EXPORTER_PUSHGATEWAY_URL: ${{ secrets.GH_EXPORTER_PUSHGATEWAY_URL }}
+          TS_AUTHKEY: "${{ secrets.TS_OAUTH_SECRET }}?preauthorized=true&ephemeral=true"
