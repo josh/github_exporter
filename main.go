@@ -415,7 +415,7 @@ func main() {
 		if args.Generate.PushgatewayURL.String() != "" {
 			pusher := push.New(args.Generate.PushgatewayURL.String(), "github").Gatherer(registry)
 			var err error
-			for i := 0; i < args.Generate.PushgatewayRetries; i++ {
+			for i := 1; i < args.Generate.PushgatewayRetries; i++ {
 				if err = pusher.Push(); err == nil {
 					break
 				}
