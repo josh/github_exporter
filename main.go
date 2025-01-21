@@ -441,7 +441,7 @@ func main() {
 				if err = pusher.Push(); err == nil {
 					break
 				}
-				log.Printf("Error pushing metrics, retrying (%d/%d): %v", i+1, args.Generate.PushgatewayRetries, err)
+				log.Printf("Error pushing metrics, retrying (%d/%d): %v", i, args.Generate.PushgatewayRetries, err)
 				time.Sleep(2 * time.Second)
 			}
 			if err != nil {
