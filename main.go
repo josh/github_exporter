@@ -401,6 +401,8 @@ func main() {
 		tsServer.Hostname = args.TailscaleHostname
 		tsServer.Ephemeral = args.Generate != nil
 		tsServer.AuthKey = args.TailscaleAuthKey
+		tsServer.UserLogf = log.Printf
+		tsServer.Logf = log.Printf
 	}
 
 	switch {
@@ -425,8 +427,7 @@ func main() {
 		}
 
 		if args.Generate.PushgatewayURL.String() != "" {
-			pushHTTPClient := http.DefaultClient
-
+			var pushHTTPClient *http.Client
 			if tsServer != nil {
 				if err := tsServer.Start(); err != nil {
 					log.Fatalf("Error starting Tailscale server: %v", err)
