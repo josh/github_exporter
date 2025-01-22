@@ -425,7 +425,8 @@ func main() {
 		}
 
 		if args.Generate.PushgatewayURL.String() != "" {
-			var pushHTTPClient *http.Client
+			pushHTTPClient := http.DefaultClient
+
 			if tsServer != nil {
 				if err := tsServer.Start(); err != nil {
 					log.Fatalf("Error starting Tailscale server: %v", err)
