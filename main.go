@@ -401,8 +401,6 @@ func main() {
 		tsServer.Hostname = args.TailscaleHostname
 		tsServer.Ephemeral = args.Generate != nil
 		tsServer.AuthKey = args.TailscaleAuthKey
-		tsServer.UserLogf = log.Printf
-		tsServer.Logf = log.Printf
 	}
 
 	switch {
