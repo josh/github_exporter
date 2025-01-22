@@ -59,6 +59,7 @@ jobs:
 
   metrics-tsnet:
     runs-on: ubuntu-24.04
+    continue-on-error: true
 
     steps:
       - name: Get latest Go workflow run number
