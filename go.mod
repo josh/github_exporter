@@ -8,7 +8,8 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/common v0.62.0
 	golang.org/x/oauth2 v0.25.0
-	golang.org/x/sync v0.10.0
+	golang.org/x/sync v0.11.0
+	tailscale.com v1.78.3
 )
 
 require (
@@ -98,5 +99,4 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/protobuf v1.36.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20240722211153-64c016c92987 // indirect
-	tailscale.com v1.78.3 // indirect
 )
