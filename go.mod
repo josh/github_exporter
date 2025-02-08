@@ -7,7 +7,7 @@ require (
 	github.com/google/go-github/v68 v68.0.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/common v0.62.0
-	golang.org/x/oauth2 v0.25.0
+	golang.org/x/oauth2 v0.26.0
 	golang.org/x/sync v0.11.0
 	tailscale.com v1.78.3
 )
