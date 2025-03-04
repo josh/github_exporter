@@ -30,6 +30,14 @@ var (
 var (
 	registry = prometheus.NewRegistry()
 
+	repoCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_repo_count",
+			Help: "The total number of repositories",
+		},
+		[]string{"owner", "visibility", "archived"},
+	)
+
 	issueCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "github_issue_count",
@@ -64,6 +72,7 @@ var (
 )
 
 func init() {
+	registry.MustRegister(repoCount)
 	registry.MustRegister(issueCount)
 	registry.MustRegister(notificationCount)
 	registry.MustRegister(workflowRunNumber)
@@ -94,8 +103,19 @@ func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
 		}
 
 		repoGroup, ctx := errgroup.WithContext(ctx)
+
+		repoGroup.Go(func() error {
+			if err := updateRepoCountMetrics(ctx, repos); err != nil {
+				return fmt.Errorf("repo count metrics: %w", err)
+			}
+			return nil
+		})
+
 		for _, repo := range repos {
 			repo := repo
+			if repo.GetArchived() {
+				continue
+			}
 			repoGroup.Go(func() error {
 				if err := updateWorkflowRunMetrics(ctx, client, repo); err != nil {
 					return fmt.Errorf("workflow metrics for %s: %w", repo.GetFullName(), err)
@@ -126,6 +146,47 @@ func updateNotificationsMetrics(ctx context.Context, client *github.Client) erro
 	return nil
 }
 
+func updateRepoCountMetrics(ctx context.Context, repos []*github.Repository) error {
+	repoCounts := make(map[string]map[string]map[string]int)
+
+	for _, repo := range repos {
+		owner := repo.GetOwner().GetLogin()
+
+		visibility := "public"
+		if repo.GetPrivate() {
+			visibility = "private"
+		}
+
+		archived := "false"
+		if repo.GetArchived() {
+			archived = "true"
+		}
+
+		if repoCounts[owner] == nil {
+			repoCounts[owner] = make(map[string]map[string]int)
+		}
+		if repoCounts[owner][visibility] == nil {
+			repoCounts[owner][visibility] = make(map[string]int)
+		}
+
+		repoCounts[owner][visibility][archived]++
+	}
+
+	for owner, visCounts := range repoCounts {
+		for visibility, archCounts := range visCounts {
+			for archived, count := range archCounts {
+				repoCount.With(prometheus.Labels{
+					"owner":      owner,
+					"visibility": visibility,
+					"archived":   archived,
+				}).Set(float64(count))
+			}
+		}
+	}
+
+	return nil
+}
+
 func fetchUserRepos(ctx context.Context, client *github.Client) ([]*github.Repository, error) {
 	opts := &github.RepositoryListByAuthenticatedUserOptions{
 		Type:      "owner",
@@ -144,7 +205,7 @@ func fetchUserRepos(ctx context.Context, client *github.Client) ([]*github.Repos
 		}
 
 		for _, repo := range repos {
-			if repo != nil && !repo.GetArchived() {
+			if repo != nil {
 				allRepos = append(allRepos, repo)
 			}
 		}
