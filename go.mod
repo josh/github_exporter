@@ -9,7 +9,7 @@ require (
 	github.com/prometheus/common v0.62.0
 	golang.org/x/oauth2 v0.27.0
 	golang.org/x/sync v0.11.0
-	tailscale.com v1.80.2
+	tailscale.com v1.80.3
 )
 
 require (
