@@ -5,7 +5,7 @@ go 1.23.3
 require (
 	github.com/alexflint/go-arg v1.5.1
 	github.com/google/go-github/v68 v68.0.0
-	github.com/prometheus/client_golang v1.21.0
+	github.com/prometheus/client_golang v1.21.1
 	github.com/prometheus/common v0.62.0
 	golang.org/x/oauth2 v0.27.0
 	golang.org/x/sync v0.11.0
