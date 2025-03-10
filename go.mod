@@ -8,7 +8,7 @@ require (
 	github.com/prometheus/client_golang v1.21.1
 	github.com/prometheus/common v0.62.0
 	golang.org/x/oauth2 v0.28.0
-	golang.org/x/sync v0.11.0
+	golang.org/x/sync v0.12.0
 	tailscale.com v1.80.3
 )
 
