@@ -11,7 +11,7 @@ require (
 	github.com/prometheus/common v0.63.0
 	golang.org/x/oauth2 v0.29.0
 	golang.org/x/sync v0.13.0
-	tailscale.com v1.82.0
+	tailscale.com v1.82.4
 )
 
 require (
