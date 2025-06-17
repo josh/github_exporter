@@ -465,11 +465,6 @@ func main() {
 			tsServer.Logf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
 			tsServer.UserLogf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
 		}
-
-		_, err := tsServer.Up(ctx)
-		if err != nil {
-			log.Fatalf("Error starting Tailscale server: %v", err)
-		}
 	}
 
 	switch {
