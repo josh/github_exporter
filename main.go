@@ -461,6 +461,10 @@ func main() {
 		tsServer.Hostname = args.TailscaleHostname
 		tsServer.Ephemeral = args.Generate != nil
 		tsServer.AuthKey = args.TailscaleAuthKey
+		if args.Verbose {
+			tsServer.Logf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
+			tsServer.UserLogf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
+		}
 	}
 
 	switch {
