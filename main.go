@@ -112,7 +112,6 @@ func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
 		})
 
 		for _, repo := range repos {
-			repo := repo
 			if repo.GetArchived() {
 				continue
 			}
@@ -318,7 +317,7 @@ func updateIssueMetrics(ctx context.Context, client *github.Client) error {
 	}
 	username := user.GetLogin()
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"login": username,
 	}
 
@@ -357,11 +356,11 @@ func updateIssueMetrics(ctx context.Context, client *github.Client) error {
 }
 
 type graphQLRequest struct {
-	Query     string                 `json:"query"`
-	Variables map[string]interface{} `json:"variables"`
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables"`
 }
 
-func executeGraphQL(client *github.Client, ctx context.Context, query string, variables map[string]interface{}, response interface{}) error {
+func executeGraphQL(client *github.Client, ctx context.Context, query string, variables map[string]any, response any) error {
 	req := graphQLRequest{
 		Query:     query,
 		Variables: variables,
