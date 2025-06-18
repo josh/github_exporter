@@ -429,6 +429,16 @@ type mainCommand struct {
 	Serve             *serveCommand    `arg:"subcommand:serve"`
 }
 
+func fetchGitHubToken() string {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
+	}
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return token
+	}
+	return ""
+}
+
 func main() {
 	var args mainCommand
 	p := arg.MustParse(&args)
@@ -436,6 +446,10 @@ func main() {
 	if args.Version {
 		fmt.Println(version)
 		os.Exit(0)
+	}
+
+	if args.Token == "" {
+		args.Token = fetchGitHubToken()
 	}
 
 	if args.Token == "" {
