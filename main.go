@@ -436,6 +436,20 @@ func fetchGitHubToken() string {
 	if token := os.Getenv("GH_TOKEN"); token != "" {
 		return token
 	}
+
+	if credsDir := os.Getenv("CREDENTIALS_DIRECTORY"); credsDir != "" {
+		filenames := []string{"GITHUB_TOKEN", "GH_TOKEN", "github-token", "gh-token"}
+		for _, filename := range filenames {
+			filepath := credsDir + "/" + filename
+			if data, err := os.ReadFile(filepath); err == nil {
+				token := string(bytes.TrimSpace(data))
+				if token != "" {
+					return token
+				}
+			}
+		}
+	}
+
 	return ""
 }
 
