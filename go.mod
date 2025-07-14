@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
-	github.com/alexflint/go-arg v1.5.1
+	github.com/alexflint/go-arg v1.6.0
 	github.com/google/go-github/v68 v68.0.0
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/common v0.65.0
