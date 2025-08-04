@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alexflint/go-arg"
@@ -454,6 +456,36 @@ func fetchGitHubToken() string {
 	return ""
 }
 
+func activationListener() (net.Listener, error) {
+	if os.Getenv("LISTEN_PID") != fmt.Sprintf("%d", os.Getpid()) {
+		return nil, fmt.Errorf("expected LISTEN_PID=%d, but was %s", os.Getpid(), os.Getenv("LISTEN_PID"))
+	}
+
+	if os.Getenv("LISTEN_FDS") != "1" {
+		return nil, fmt.Errorf("expected LISTEN_FDS=1, but was %s", os.Getenv("LISTEN_FDS"))
+	}
+
+	names := strings.Split(os.Getenv("LISTEN_FDNAMES"), ":")
+	if len(names) != 1 {
+		return nil, fmt.Errorf("expected LISTEN_FDNAMES to set 1 name, but was '%s'", os.Getenv("LISTEN_FDNAMES"))
+	}
+
+	fd := 3
+	syscall.CloseOnExec(fd)
+	f := os.NewFile(uintptr(fd), names[0])
+
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close file: %w", err)
+	}
+
+	return ln, nil
+}
+
 func main() {
 	var args mainCommand
 	p := arg.MustParse(&args)
@@ -566,7 +598,9 @@ func main() {
 
 		var ln net.Listener
 		var err error
-		if tsServer != nil {
+		if os.Getenv("LISTEN_FDS") == "1" {
+			ln, err = activationListener()
+		} else if tsServer != nil {
 			ln, err = tsServer.Listen("tcp", args.Serve.Addr)
 		} else {
 			ln, err = net.Listen("tcp", args.Serve.Addr)
@@ -574,7 +608,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error listening on %s: %v", args.Serve.Addr, err)
 		}
-		defer ln.Close()
+		defer func() {
+			if err := ln.Close(); err != nil {
+				log.Printf("Error closing listener: %v", err)
+			}
+		}()
 
 		http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
 		log.Fatal(http.Serve(ln, nil))
