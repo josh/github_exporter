@@ -18,11 +18,11 @@ Run as a Prometheus metrics endpoint:
 github_exporter serve [options]
 
 Options:
-  -h, --host      Host address to listen on (default: ":9100")
+  -h, --host      Host address to listen on (default: ":9448")
   -i, --interval  Metrics collection interval (default: 15m)
 ```
 
-Metrics will be available at `http://localhost:9100/metrics`
+Metrics will be available at `http://localhost:9448/metrics`
 
 ### Generate Mode
 

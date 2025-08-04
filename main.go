@@ -415,7 +415,7 @@ type generateCommand struct {
 }
 
 type serveCommand struct {
-	Host     string        `arg:"-h,--host,env:GITHUB_EXPORTER_HOST" default:":9100" placeholder:"HOST"`
+	Host     string        `arg:"-h,--host,env:GITHUB_EXPORTER_HOST" default:":9448" placeholder:"HOST"`
 	Interval time.Duration `arg:"-i,--interval,env:GITHUB_EXPORTER_INTERVAL" default:"15m" placeholder:"INTERVAL"`
 }
 
