@@ -82,335 +82,6 @@ func init() {
 	registry.MustRegister(workflowRunState)
 }
 
-func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		if err := updateNotificationsMetrics(ctx, client); err != nil {
-			return fmt.Errorf("notifications metrics: %w", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		if err := updateIssueMetrics(ctx, client); err != nil {
-			return fmt.Errorf("issue metrics: %w", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		repos, err := fetchUserRepos(ctx, client)
-		if err != nil {
-			return fmt.Errorf("fetching repos: %w", err)
-		}
-
-		repoGroup, ctx := errgroup.WithContext(ctx)
-
-		repoGroup.Go(func() error {
-			if err := updateRepoCountMetrics(ctx, repos); err != nil {
-				return fmt.Errorf("repo count metrics: %w", err)
-			}
-			return nil
-		})
-
-		for _, repo := range repos {
-			if repo.GetArchived() {
-				continue
-			}
-			repoGroup.Go(func() error {
-				if err := updateWorkflowRunMetrics(ctx, client, repo); err != nil {
-					return fmt.Errorf("workflow metrics for %s: %w", repo.GetFullName(), err)
-				}
-				return nil
-			})
-		}
-		return repoGroup.Wait()
-	})
-
-	return g.Wait()
-}
-
-func updateNotificationsMetrics(ctx context.Context, client *github.Client) error {
-	notifications, _, err := client.Activity.ListNotifications(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	unreadCount := 0
-	for _, notification := range notifications {
-		if notification.Unread != nil && *notification.Unread {
-			unreadCount++
-		}
-	}
-	notificationCount.With(prometheus.Labels{"unread": "true"}).Set(float64(unreadCount))
-
-	return nil
-}
-
-func updateRepoCountMetrics(ctx context.Context, repos []*github.Repository) error {
-	repoCounts := make(map[string]map[string]map[string]int)
-
-	for _, repo := range repos {
-		owner := repo.GetOwner().GetLogin()
-
-		visibility := "public"
-		if repo.GetPrivate() {
-			visibility = "private"
-		}
-
-		archived := "false"
-		if repo.GetArchived() {
-			archived = "true"
-		}
-
-		if repoCounts[owner] == nil {
-			repoCounts[owner] = make(map[string]map[string]int)
-		}
-		if repoCounts[owner][visibility] == nil {
-			repoCounts[owner][visibility] = make(map[string]int)
-		}
-
-		repoCounts[owner][visibility][archived]++
-	}
-
-	for owner, visCounts := range repoCounts {
-		for visibility, archCounts := range visCounts {
-			for archived, count := range archCounts {
-				repoCount.With(prometheus.Labels{
-					"owner":      owner,
-					"visibility": visibility,
-					"archived":   archived,
-				}).Set(float64(count))
-			}
-		}
-	}
-
-	return nil
-}
-
-func fetchUserRepos(ctx context.Context, client *github.Client) ([]*github.Repository, error) {
-	opts := &github.RepositoryListByAuthenticatedUserOptions{
-		Type:      "owner",
-		Sort:      "full_name",
-		Direction: "asc",
-		ListOptions: github.ListOptions{
-			PerPage: 100,
-		},
-	}
-
-	var allRepos []*github.Repository
-	for {
-		repos, resp, err := client.Repositories.ListByAuthenticatedUser(ctx, opts)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, repo := range repos {
-			if repo != nil {
-				allRepos = append(allRepos, repo)
-			}
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-
-	return allRepos, nil
-}
-
-func updateWorkflowRunMetrics(ctx context.Context, client *github.Client, repo *github.Repository) error {
-	owner, repoName := repo.GetOwner().GetLogin(), repo.GetName()
-
-	runs, _, err := client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repoName, &github.ListWorkflowRunsOptions{
-		Branch: repo.GetDefaultBranch(),
-		Status: "completed",
-		ListOptions: github.ListOptions{
-			PerPage: 100,
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	latestRuns := make(map[int64]*github.WorkflowRun)
-	for _, run := range runs.WorkflowRuns {
-		workflowID := run.GetWorkflowID()
-		if existing, ok := latestRuns[workflowID]; !ok || run.GetRunNumber() > existing.GetRunNumber() {
-			latestRuns[workflowID] = run
-		}
-	}
-
-	workflows, _, err := client.Actions.ListWorkflows(ctx, owner, repoName, &github.ListOptions{})
-	if err != nil {
-		return err
-	}
-
-	for _, workflow := range workflows.Workflows {
-		if latestRun, ok := latestRuns[workflow.GetID()]; ok {
-			workflowRunNumber.With(prometheus.Labels{
-				"github_repo":   *repo.FullName,
-				"workflow_name": workflow.GetName(),
-			}).Set(float64(latestRun.GetRunNumber()))
-
-			conclusions := []string{"action_required", "cancelled", "failure", "neutral",
-				"skipped", "stale", "startup_failure", "success", "timed_out"}
-			for _, conclusion := range conclusions {
-				value := 0.0
-				if conclusion == latestRun.GetConclusion() {
-					value = 1.0
-				}
-				workflowRunState.With(prometheus.Labels{
-					"github_repo":                    *repo.FullName,
-					"workflow_name":                  workflow.GetName(),
-					"github_workflow_run_conclusion": conclusion,
-				}).Set(value)
-			}
-		}
-	}
-
-	return nil
-}
-
-const issuesGraphQLQuery = `
-query($login: String!) {
-	user(login: $login) {
-		repositories(first: 100, affiliations: OWNER, isArchived: false) {
-			nodes {
-				nameWithOwner
-				openIssues: issues(states: OPEN) { totalCount }
-				closedIssues: issues(states: CLOSED) { totalCount }
-				openPulls: pullRequests(states: OPEN) { totalCount }
-				closedPulls: pullRequests(states: CLOSED) { totalCount }
-			}
-		}
-	}
-}`
-
-type graphQLIssuesResponse struct {
-	Data struct {
-		User struct {
-			Repositories struct {
-				Nodes []struct {
-					NameWithOwner string `json:"nameWithOwner"`
-					OpenIssues    struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"openIssues"`
-					ClosedIssues struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"closedIssues"`
-					OpenPulls struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"openPulls"`
-					ClosedPulls struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"closedPulls"`
-				} `json:"nodes"`
-			} `json:"repositories"`
-		} `json:"user"`
-	} `json:"data"`
-}
-
-func updateIssueMetrics(ctx context.Context, client *github.Client) error {
-	user, _, err := client.Users.Get(ctx, "")
-	if err != nil {
-		return err
-	}
-	username := user.GetLogin()
-
-	variables := map[string]any{
-		"login": username,
-	}
-
-	var response graphQLIssuesResponse
-	if err := executeGraphQL(client, ctx, issuesGraphQLQuery, variables, &response); err != nil {
-		return err
-	}
-
-	for _, repo := range response.Data.User.Repositories.Nodes {
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "issue",
-			"state":       "open",
-		}).Set(float64(repo.OpenIssues.TotalCount))
-
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "issue",
-			"state":       "closed",
-		}).Set(float64(repo.ClosedIssues.TotalCount))
-
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "pull",
-			"state":       "open",
-		}).Set(float64(repo.OpenPulls.TotalCount))
-
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "pull",
-			"state":       "closed",
-		}).Set(float64(repo.ClosedPulls.TotalCount))
-	}
-
-	return nil
-}
-
-type graphQLRequest struct {
-	Query     string         `json:"query"`
-	Variables map[string]any `json:"variables"`
-}
-
-func executeGraphQL(client *github.Client, ctx context.Context, query string, variables map[string]any, response any) error {
-	req := graphQLRequest{
-		Query:     query,
-		Variables: variables,
-	}
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(req); err != nil {
-		return err
-	}
-
-	graphqlReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.github.com/graphql", &buf)
-	if err != nil {
-		return err
-	}
-
-	resp, err := client.Client().Do(graphqlReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return json.NewDecoder(resp.Body).Decode(response)
-}
-
-func writeToStdout(reg *prometheus.Registry) error {
-	enc := expfmt.NewEncoder(os.Stdout, expfmt.NewFormat(expfmt.TypeTextPlain))
-	mfs, err := reg.Gather()
-	if err != nil {
-		return err
-	}
-	for _, mf := range mfs {
-		if err := enc.Encode(mf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-type loggingRoundTripper struct {
-	wrapped http.RoundTripper
-}
-
-func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	fmt.Fprintf(os.Stderr, "[%s] %s %s\n", time.Now().Format(time.RFC3339), req.Method, req.URL)
-	return l.wrapped.RoundTrip(req)
-}
-
 type generateCommand struct {
 	Output             string  `arg:"-o,--output,env:GITHUB_EXPORTER_OUTPUT" placeholder:"FILE"`
 	PushgatewayURL     url.URL `arg:"-p,--pushgateway-url,env:GITHUB_EXPORTER_PUSHGATEWAY_URL" placeholder:"URL"`
@@ -430,60 +101,6 @@ type mainCommand struct {
 	Version           bool             `arg:"-V,--version" help:"Print version information"`
 	Generate          *generateCommand `arg:"subcommand:generate"`
 	Serve             *serveCommand    `arg:"subcommand:serve"`
-}
-
-func fetchGitHubToken() string {
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return token
-	}
-	if token := os.Getenv("GH_TOKEN"); token != "" {
-		return token
-	}
-
-	if credsDir := os.Getenv("CREDENTIALS_DIRECTORY"); credsDir != "" {
-		filenames := []string{"GITHUB_TOKEN", "GH_TOKEN", "github-token", "gh-token"}
-		for _, filename := range filenames {
-			filepath := credsDir + "/" + filename
-			if data, err := os.ReadFile(filepath); err == nil {
-				token := string(bytes.TrimSpace(data))
-				if token != "" {
-					return token
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func activationListener() (net.Listener, error) {
-	if os.Getenv("LISTEN_PID") != fmt.Sprintf("%d", os.Getpid()) {
-		return nil, fmt.Errorf("expected LISTEN_PID=%d, but was %s", os.Getpid(), os.Getenv("LISTEN_PID"))
-	}
-
-	if os.Getenv("LISTEN_FDS") != "1" {
-		return nil, fmt.Errorf("expected LISTEN_FDS=1, but was %s", os.Getenv("LISTEN_FDS"))
-	}
-
-	names := strings.Split(os.Getenv("LISTEN_FDNAMES"), ":")
-	if len(names) != 1 {
-		return nil, fmt.Errorf("expected LISTEN_FDNAMES to set 1 name, but was '%s'", os.Getenv("LISTEN_FDNAMES"))
-	}
-
-	fd := 3
-	syscall.CloseOnExec(fd)
-	f := os.NewFile(uintptr(fd), names[0])
-
-	ln, err := net.FileListener(f)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close file: %w", err)
-	}
-
-	return ln, nil
 }
 
 func main() {
@@ -621,4 +238,387 @@ func main() {
 		p.WriteHelp(os.Stdout)
 		os.Exit(1)
 	}
+}
+
+type loggingRoundTripper struct {
+	wrapped http.RoundTripper
+}
+
+func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	fmt.Fprintf(os.Stderr, "[%s] %s %s\n", time.Now().Format(time.RFC3339), req.Method, req.URL)
+	return l.wrapped.RoundTrip(req)
+}
+
+func fetchGitHubToken() string {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return token
+	}
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return token
+	}
+
+	if credsDir := os.Getenv("CREDENTIALS_DIRECTORY"); credsDir != "" {
+		filenames := []string{"GITHUB_TOKEN", "GH_TOKEN", "github-token", "gh-token"}
+		for _, filename := range filenames {
+			filepath := credsDir + "/" + filename
+			if data, err := os.ReadFile(filepath); err == nil {
+				token := string(bytes.TrimSpace(data))
+				if token != "" {
+					return token
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		if err := updateNotificationsMetrics(ctx, client); err != nil {
+			return fmt.Errorf("notifications metrics: %w", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := updateIssueMetrics(ctx, client); err != nil {
+			return fmt.Errorf("issue metrics: %w", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		repos, err := fetchUserRepos(ctx, client)
+		if err != nil {
+			return fmt.Errorf("fetching repos: %w", err)
+		}
+
+		repoGroup, ctx := errgroup.WithContext(ctx)
+
+		repoGroup.Go(func() error {
+			if err := updateRepoCountMetrics(ctx, repos); err != nil {
+				return fmt.Errorf("repo count metrics: %w", err)
+			}
+			return nil
+		})
+
+		for _, repo := range repos {
+			if repo.GetArchived() {
+				continue
+			}
+			repoGroup.Go(func() error {
+				if err := updateWorkflowRunMetrics(ctx, client, repo); err != nil {
+					return fmt.Errorf("workflow metrics for %s: %w", repo.GetFullName(), err)
+				}
+				return nil
+			})
+		}
+		return repoGroup.Wait()
+	})
+
+	return g.Wait()
+}
+
+const issuesGraphQLQuery = `
+query($login: String!) {
+	user(login: $login) {
+		repositories(first: 100, affiliations: OWNER, isArchived: false) {
+			nodes {
+				nameWithOwner
+				openIssues: issues(states: OPEN) { totalCount }
+				closedIssues: issues(states: CLOSED) { totalCount }
+				openPulls: pullRequests(states: OPEN) { totalCount }
+				closedPulls: pullRequests(states: CLOSED) { totalCount }
+			}
+		}
+	}
+}`
+
+type graphQLIssuesResponse struct {
+	Data struct {
+		User struct {
+			Repositories struct {
+				Nodes []struct {
+					NameWithOwner string `json:"nameWithOwner"`
+					OpenIssues    struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"openIssues"`
+					ClosedIssues struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"closedIssues"`
+					OpenPulls struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"openPulls"`
+					ClosedPulls struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"closedPulls"`
+				} `json:"nodes"`
+			} `json:"repositories"`
+		} `json:"user"`
+	} `json:"data"`
+}
+
+func writeToStdout(reg *prometheus.Registry) error {
+	enc := expfmt.NewEncoder(os.Stdout, expfmt.NewFormat(expfmt.TypeTextPlain))
+	mfs, err := reg.Gather()
+	if err != nil {
+		return err
+	}
+	for _, mf := range mfs {
+		if err := enc.Encode(mf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func activationListener() (net.Listener, error) {
+	if os.Getenv("LISTEN_PID") != fmt.Sprintf("%d", os.Getpid()) {
+		return nil, fmt.Errorf("expected LISTEN_PID=%d, but was %s", os.Getpid(), os.Getenv("LISTEN_PID"))
+	}
+
+	if os.Getenv("LISTEN_FDS") != "1" {
+		return nil, fmt.Errorf("expected LISTEN_FDS=1, but was %s", os.Getenv("LISTEN_FDS"))
+	}
+
+	names := strings.Split(os.Getenv("LISTEN_FDNAMES"), ":")
+	if len(names) != 1 {
+		return nil, fmt.Errorf("expected LISTEN_FDNAMES to set 1 name, but was '%s'", os.Getenv("LISTEN_FDNAMES"))
+	}
+
+	fd := 3
+	syscall.CloseOnExec(fd)
+	f := os.NewFile(uintptr(fd), names[0])
+
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close file: %w", err)
+	}
+
+	return ln, nil
+}
+
+func updateNotificationsMetrics(ctx context.Context, client *github.Client) error {
+	notifications, _, err := client.Activity.ListNotifications(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	unreadCount := 0
+	for _, notification := range notifications {
+		if notification.Unread != nil && *notification.Unread {
+			unreadCount++
+		}
+	}
+	notificationCount.With(prometheus.Labels{"unread": "true"}).Set(float64(unreadCount))
+
+	return nil
+}
+
+func updateIssueMetrics(ctx context.Context, client *github.Client) error {
+	user, _, err := client.Users.Get(ctx, "")
+	if err != nil {
+		return err
+	}
+	username := user.GetLogin()
+
+	variables := map[string]any{
+		"login": username,
+	}
+
+	var response graphQLIssuesResponse
+	if err := executeGraphQL(client, ctx, issuesGraphQLQuery, variables, &response); err != nil {
+		return err
+	}
+
+	for _, repo := range response.Data.User.Repositories.Nodes {
+		issueCount.With(prometheus.Labels{
+			"github_repo": repo.NameWithOwner,
+			"type":        "issue",
+			"state":       "open",
+		}).Set(float64(repo.OpenIssues.TotalCount))
+
+		issueCount.With(prometheus.Labels{
+			"github_repo": repo.NameWithOwner,
+			"type":        "issue",
+			"state":       "closed",
+		}).Set(float64(repo.ClosedIssues.TotalCount))
+
+		issueCount.With(prometheus.Labels{
+			"github_repo": repo.NameWithOwner,
+			"type":        "pull",
+			"state":       "open",
+		}).Set(float64(repo.OpenPulls.TotalCount))
+
+		issueCount.With(prometheus.Labels{
+			"github_repo": repo.NameWithOwner,
+			"type":        "pull",
+			"state":       "closed",
+		}).Set(float64(repo.ClosedPulls.TotalCount))
+	}
+
+	return nil
+}
+
+func fetchUserRepos(ctx context.Context, client *github.Client) ([]*github.Repository, error) {
+	opts := &github.RepositoryListByAuthenticatedUserOptions{
+		Type:      "owner",
+		Sort:      "full_name",
+		Direction: "asc",
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	var allRepos []*github.Repository
+	for {
+		repos, resp, err := client.Repositories.ListByAuthenticatedUser(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, repo := range repos {
+			if repo != nil {
+				allRepos = append(allRepos, repo)
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return allRepos, nil
+}
+
+func updateRepoCountMetrics(ctx context.Context, repos []*github.Repository) error {
+	repoCounts := make(map[string]map[string]map[string]int)
+
+	for _, repo := range repos {
+		owner := repo.GetOwner().GetLogin()
+
+		visibility := "public"
+		if repo.GetPrivate() {
+			visibility = "private"
+		}
+
+		archived := "false"
+		if repo.GetArchived() {
+			archived = "true"
+		}
+
+		if repoCounts[owner] == nil {
+			repoCounts[owner] = make(map[string]map[string]int)
+		}
+		if repoCounts[owner][visibility] == nil {
+			repoCounts[owner][visibility] = make(map[string]int)
+		}
+
+		repoCounts[owner][visibility][archived]++
+	}
+
+	for owner, visCounts := range repoCounts {
+		for visibility, archCounts := range visCounts {
+			for archived, count := range archCounts {
+				repoCount.With(prometheus.Labels{
+					"owner":      owner,
+					"visibility": visibility,
+					"archived":   archived,
+				}).Set(float64(count))
+			}
+		}
+	}
+
+	return nil
+}
+
+type graphQLRequest struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables"`
+}
+
+func updateWorkflowRunMetrics(ctx context.Context, client *github.Client, repo *github.Repository) error {
+	owner, repoName := repo.GetOwner().GetLogin(), repo.GetName()
+
+	runs, _, err := client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repoName, &github.ListWorkflowRunsOptions{
+		Branch: repo.GetDefaultBranch(),
+		Status: "completed",
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	latestRuns := make(map[int64]*github.WorkflowRun)
+	for _, run := range runs.WorkflowRuns {
+		workflowID := run.GetWorkflowID()
+		if existing, ok := latestRuns[workflowID]; !ok || run.GetRunNumber() > existing.GetRunNumber() {
+			latestRuns[workflowID] = run
+		}
+	}
+
+	workflows, _, err := client.Actions.ListWorkflows(ctx, owner, repoName, &github.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	for _, workflow := range workflows.Workflows {
+		if latestRun, ok := latestRuns[workflow.GetID()]; ok {
+			workflowRunNumber.With(prometheus.Labels{
+				"github_repo":   *repo.FullName,
+				"workflow_name": workflow.GetName(),
+			}).Set(float64(latestRun.GetRunNumber()))
+
+			conclusions := []string{"action_required", "cancelled", "failure", "neutral",
+				"skipped", "stale", "startup_failure", "success", "timed_out"}
+			for _, conclusion := range conclusions {
+				value := 0.0
+				if conclusion == latestRun.GetConclusion() {
+					value = 1.0
+				}
+				workflowRunState.With(prometheus.Labels{
+					"github_repo":                    *repo.FullName,
+					"workflow_name":                  workflow.GetName(),
+					"github_workflow_run_conclusion": conclusion,
+				}).Set(value)
+			}
+		}
+	}
+
+	return nil
+}
+
+func executeGraphQL(client *github.Client, ctx context.Context, query string, variables map[string]any, response any) error {
+	req := graphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(req); err != nil {
+		return err
+	}
+
+	graphqlReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.github.com/graphql", &buf)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Client().Do(graphqlReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return json.NewDecoder(resp.Body).Decode(response)
 }
