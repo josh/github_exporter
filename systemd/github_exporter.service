@@ -1,0 +1,9 @@
+[Unit]
+Description=Prometheus GitHub Exporter
+Documentation=https://github.com/josh/github_exporter
+Requires=github_exporter.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/github_exporter
+DynamicUser=true

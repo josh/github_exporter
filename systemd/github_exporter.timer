@@ -1,0 +1,9 @@
+[Unit]
+Description=Gather GitHub metrics at regular interval
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

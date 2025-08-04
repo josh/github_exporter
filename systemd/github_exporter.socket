@@ -1,0 +1,8 @@
+[Unit]
+Description=Prometheus GitHub Exporter
+
+[Socket]
+ListenStream=9824
+
+[Install]
+WantedBy=sockets.target
