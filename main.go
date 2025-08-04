@@ -416,7 +416,7 @@ type generateCommand struct {
 }
 
 type serveCommand struct {
-	Host     string        `arg:"-h,--host,env:GITHUB_EXPORTER_HOST" default:":9448" placeholder:"HOST"`
+	Addr     string        `arg:"-l,--listen,env:GITHUB_EXPORTER_LISTEN" default:":9448" placeholder:"ADDRESS:PORT"`
 	Interval time.Duration `arg:"-i,--interval,env:GITHUB_EXPORTER_INTERVAL" default:"15m" placeholder:"INTERVAL"`
 }
 
@@ -567,12 +567,12 @@ func main() {
 		var ln net.Listener
 		var err error
 		if tsServer != nil {
-			ln, err = tsServer.Listen("tcp", args.Serve.Host)
+			ln, err = tsServer.Listen("tcp", args.Serve.Addr)
 		} else {
-			ln, err = net.Listen("tcp", args.Serve.Host)
+			ln, err = net.Listen("tcp", args.Serve.Addr)
 		}
 		if err != nil {
-			log.Fatalf("Error listening on %s: %v", args.Serve.Host, err)
+			log.Fatalf("Error listening on %s: %v", args.Serve.Addr, err)
 		}
 		defer ln.Close()
 
