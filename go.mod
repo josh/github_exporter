@@ -5,7 +5,7 @@ go 1.24.4
 require (
 	github.com/alexflint/go-arg v1.6.0
 	github.com/google/go-github/v68 v68.0.0
-	github.com/prometheus/client_golang v1.22.0
+	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/common v0.65.0
 	golang.org/x/oauth2 v0.30.0
 	golang.org/x/sync v0.16.0
@@ -62,7 +62,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
