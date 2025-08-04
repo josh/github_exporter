@@ -23,8 +23,9 @@ import (
 	"tailscale.com/tsnet"
 )
 
+// constants settable at build time
 var (
-	version = "1.0.0"
+	Version = "1.0.0"
 )
 
 var (
@@ -458,7 +459,7 @@ func main() {
 	p := arg.MustParse(&args)
 
 	if args.Version {
-		fmt.Println(version)
+		fmt.Println(Version)
 		os.Exit(0)
 	}
 
