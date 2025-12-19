@@ -22,7 +22,6 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/errgroup"
-	"tailscale.com/tsnet"
 )
 
 // constants settable at build time
@@ -94,13 +93,11 @@ type serveCommand struct {
 }
 
 type mainCommand struct {
-	Token             string           `arg:"-t,--token,env:GITHUB_TOKEN" placeholder:"TOKEN"`
-	TailscaleAuthKey  string           `arg:"--ts-authkey,env:TS_AUTHKEY" placeholder:"KEY"`
-	TailscaleHostname string           `arg:"--ts-hostname,env:TS_HOSTNAME" default:"github_exporter" placeholder:"HOSTNAME"`
-	Verbose           bool             `arg:"-v,--verbose,env:GITHUB_EXPORTER_VERBOSE" help:"Enable verbose logging"`
-	Version           bool             `arg:"-V,--version" help:"Print version information"`
-	Generate          *generateCommand `arg:"subcommand:generate"`
-	Serve             *serveCommand    `arg:"subcommand:serve"`
+	Token    string           `arg:"-t,--token,env:GITHUB_TOKEN" placeholder:"TOKEN"`
+	Verbose  bool             `arg:"-v,--verbose,env:GITHUB_EXPORTER_VERBOSE" help:"Enable verbose logging"`
+	Version  bool             `arg:"-V,--version" help:"Print version information"`
+	Generate *generateCommand `arg:"subcommand:generate"`
+	Serve    *serveCommand    `arg:"subcommand:serve"`
 }
 
 func main() {
@@ -133,18 +130,6 @@ func main() {
 	}
 	client := github.NewClient(httpClient)
 
-	var tsServer *tsnet.Server
-	if args.TailscaleAuthKey != "" && args.TailscaleHostname != "" {
-		tsServer = new(tsnet.Server)
-		tsServer.Hostname = args.TailscaleHostname
-		tsServer.Ephemeral = args.Generate != nil
-		tsServer.AuthKey = args.TailscaleAuthKey
-		if args.Verbose {
-			tsServer.Logf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
-			tsServer.UserLogf = log.New(os.Stderr, fmt.Sprintf("[tsnet:%s] ", tsServer.Hostname), log.LstdFlags).Printf
-		}
-	}
-
 	switch {
 	case args.Generate != nil:
 		if err := updateGitHubMetrics(client, ctx); err != nil {
@@ -167,17 +152,7 @@ func main() {
 		}
 
 		if args.Generate.PushgatewayURL.String() != "" {
-			pushHTTPClient := http.DefaultClient
-
-			if tsServer != nil {
-				if err := tsServer.Start(); err != nil {
-					log.Fatalf("Error starting Tailscale server: %v", err)
-				}
-				defer tsServer.Close()
-				pushHTTPClient = tsServer.HTTPClient()
-			}
-
-			pusher := push.New(args.Generate.PushgatewayURL.String(), "github").Client(pushHTTPClient).Gatherer(registry)
+			pusher := push.New(args.Generate.PushgatewayURL.String(), "github").Client(http.DefaultClient).Gatherer(registry)
 			var err error
 			for i := 1; i < args.Generate.PushgatewayRetries; i++ {
 				if err = pusher.Push(); err == nil {
@@ -206,19 +181,10 @@ func main() {
 			}
 		}()
 
-		if tsServer != nil {
-			if err := tsServer.Start(); err != nil {
-				log.Fatalf("Error starting Tailscale server: %v", err)
-			}
-			defer tsServer.Close()
-		}
-
 		var ln net.Listener
 		var err error
 		if os.Getenv("LISTEN_FDS") == "1" {
 			ln, err = activationListener()
-		} else if tsServer != nil {
-			ln, err = tsServer.Listen("tcp", args.Serve.Addr)
 		} else {
 			ln, err = net.Listen("tcp", args.Serve.Addr)
 		}
