@@ -1,6 +1,6 @@
 module github.com/josh/github_exporter
 
-go 1.25.3
+go 1.25.5
 
 require (
 	github.com/alexflint/go-arg v1.6.0
