@@ -119,6 +119,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	warnIfIncompatibleToken(args.Token)
+
 	ctx := context.Background()
 
 	ts := oauth2.StaticTokenSource(
@@ -204,6 +206,17 @@ func main() {
 	default:
 		p.WriteHelp(os.Stdout)
 		os.Exit(1)
+	}
+}
+
+func warnIfIncompatibleToken(token string) {
+	switch {
+	case strings.HasPrefix(token, "github_pat_"):
+		log.Println("Warning: fine-grained personal access tokens do not support the notifications API; notification metrics will fail")
+	case strings.HasPrefix(token, "ghs_"):
+		log.Println("Warning: GitHub App installation tokens do not support user-scoped APIs; notifications, issue, and repository metrics will fail")
+	case strings.HasPrefix(token, "ghu_"):
+		log.Println("Warning: GitHub App user-to-server tokens do not support the notifications API; notification metrics will fail")
 	}
 }
 
