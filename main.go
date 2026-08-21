@@ -40,13 +40,8 @@ var (
 		[]string{"owner", "visibility", "archived"},
 	)
 
-	issueCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "github_issue_count",
-			Help: "The count of issues or pulls",
-		},
-		[]string{"github_repo", "type", "state"},
-	)
+	issueCount          *prometheus.GaugeVec
+	issueCountHasAuthor bool
 
 	notificationCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -75,7 +70,6 @@ var (
 
 func init() {
 	registry.MustRegister(repoCount)
-	registry.MustRegister(issueCount)
 	registry.MustRegister(notificationCount)
 	registry.MustRegister(workflowRunNumber)
 	registry.MustRegister(workflowRunState)
@@ -94,6 +88,7 @@ type serveCommand struct {
 
 type mainCommand struct {
 	Token    string           `arg:"-t,--token,env:GITHUB_TOKEN" placeholder:"TOKEN"`
+	Authors  string           `arg:"--authors,env:GITHUB_EXPORTER_AUTHORS" placeholder:"AUTHORS" help:"Break out open issue and pull request counts for these comma separated authors"`
 	Verbose  bool             `arg:"-v,--verbose,env:GITHUB_EXPORTER_VERBOSE" help:"Enable verbose logging"`
 	Version  bool             `arg:"-V,--version" help:"Print version information"`
 	Generate *generateCommand `arg:"subcommand:generate"`
@@ -132,9 +127,12 @@ func main() {
 	}
 	client := github.NewClient(httpClient)
 
+	authors := parseAuthors(args.Authors)
+	registerIssueCount(len(authors) > 0)
+
 	switch {
 	case args.Generate != nil:
-		if err := updateGitHubMetrics(client, ctx); err != nil {
+		if err := updateGitHubMetrics(client, ctx, authors); err != nil {
 			log.Fatalf("Error fetching metrics: %v", err)
 		}
 
@@ -172,13 +170,13 @@ func main() {
 	case args.Serve != nil:
 		go func() {
 			log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
-			if err := updateGitHubMetrics(client, ctx); err != nil {
+			if err := updateGitHubMetrics(client, ctx, authors); err != nil {
 				log.Printf("[%s] Error fetching metrics: %v", time.Now().Format(time.RFC3339), err)
 			}
 
 			for range time.Tick(args.Serve.Interval) {
 				log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
-				if err := updateGitHubMetrics(client, ctx); err != nil {
+				if err := updateGitHubMetrics(client, ctx, authors); err != nil {
 					log.Printf("[%s] Error fetching GitHub metrics: %v", time.Now().Format(time.RFC3339), err)
 				}
 			}
@@ -253,7 +251,7 @@ func fetchGitHubToken() string {
 	return ""
 }
 
-func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
+func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []string) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -264,7 +262,7 @@ func updateGitHubMetrics(client *github.Client, ctx context.Context) error {
 	})
 
 	g.Go(func() error {
-		if err := updateIssueMetrics(ctx, client); err != nil {
+		if err := updateIssueMetrics(ctx, client, authors); err != nil {
 			return fmt.Errorf("issue metrics: %w", err)
 		}
 		return nil
@@ -341,6 +339,53 @@ type graphQLIssuesResponse struct {
 	} `json:"data"`
 }
 
+const openItemsGraphQLQuery = `
+query($q: String!, $after: String) {
+	search(query: $q, type: ISSUE, first: 100, after: $after) {
+		pageInfo {
+			hasNextPage
+			endCursor
+		}
+		nodes {
+			__typename
+			... on Issue {
+				repository { nameWithOwner }
+				author { login __typename }
+			}
+			... on PullRequest {
+				repository { nameWithOwner }
+				author { login __typename }
+			}
+		}
+	}
+}`
+
+type graphQLOpenItemsResponse struct {
+	Data struct {
+		Search struct {
+			PageInfo struct {
+				HasNextPage bool   `json:"hasNextPage"`
+				EndCursor   string `json:"endCursor"`
+			} `json:"pageInfo"`
+			Nodes []struct {
+				Typename   string `json:"__typename"`
+				Repository struct {
+					NameWithOwner string `json:"nameWithOwner"`
+				} `json:"repository"`
+				Author struct {
+					Login    string `json:"login"`
+					Typename string `json:"__typename"`
+				} `json:"author"`
+			} `json:"nodes"`
+		} `json:"search"`
+	} `json:"data"`
+}
+
+type repoIssueType struct {
+	repo      string
+	issueType string
+}
+
 func writeToStdout(reg *prometheus.Registry) error {
 	enc := expfmt.NewEncoder(os.Stdout, expfmt.NewFormat(expfmt.TypeTextPlain))
 	mfs, err := reg.Gather()
@@ -402,7 +447,7 @@ func updateNotificationsMetrics(ctx context.Context, client *github.Client) erro
 	return nil
 }
 
-func updateIssueMetrics(ctx context.Context, client *github.Client) error {
+func updateIssueMetrics(ctx context.Context, client *github.Client, authors []string) error {
 	user, _, err := client.Users.Get(ctx, "")
 	if err != nil {
 		return err
@@ -418,33 +463,157 @@ func updateIssueMetrics(ctx context.Context, client *github.Client) error {
 		return err
 	}
 
-	for _, repo := range response.Data.User.Repositories.Nodes {
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "issue",
-			"state":       "open",
-		}).Set(float64(repo.OpenIssues.TotalCount))
+	repos := response.Data.User.Repositories.Nodes
 
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "issue",
-			"state":       "closed",
-		}).Set(float64(repo.ClosedIssues.TotalCount))
+	var openByAuthor map[repoIssueType]map[string]int
+	if len(authors) > 0 {
+		known := make(map[string]bool, len(repos))
+		for _, repo := range repos {
+			known[repo.NameWithOwner] = true
+		}
 
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "pull",
-			"state":       "open",
-		}).Set(float64(repo.OpenPulls.TotalCount))
+		openByAuthor, err = fetchOpenCountsByAuthor(ctx, client, username, authors, known)
+		if err != nil {
+			return err
+		}
+	}
 
-		issueCount.With(prometheus.Labels{
-			"github_repo": repo.NameWithOwner,
-			"type":        "pull",
-			"state":       "closed",
-		}).Set(float64(repo.ClosedPulls.TotalCount))
+	issueCount.DeletePartialMatch(prometheus.Labels{"state": "open"})
+
+	for _, repo := range repos {
+		setIssueCounts(repo.NameWithOwner, "issue",
+			repo.OpenIssues.TotalCount, repo.ClosedIssues.TotalCount,
+			openByAuthor[repoIssueType{repo.NameWithOwner, "issue"}])
+
+		setIssueCounts(repo.NameWithOwner, "pull",
+			repo.OpenPulls.TotalCount, repo.ClosedPulls.TotalCount,
+			openByAuthor[repoIssueType{repo.NameWithOwner, "pull"}])
 	}
 
 	return nil
+}
+
+func registerIssueCount(withAuthor bool) {
+	issueCountHasAuthor = withAuthor
+
+	labels := []string{"github_repo", "type", "state"}
+	if withAuthor {
+		labels = append(labels, "author")
+	}
+
+	issueCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_issue_count",
+			Help: "The count of issues or pulls",
+		},
+		labels,
+	)
+	registry.MustRegister(issueCount)
+}
+
+func setIssueCount(repo string, issueType string, state string, author string, count int) {
+	labels := prometheus.Labels{
+		"github_repo": repo,
+		"type":        issueType,
+		"state":       state,
+	}
+	if issueCountHasAuthor {
+		labels["author"] = author
+	}
+
+	issueCount.With(labels).Set(float64(count))
+}
+
+func setIssueCounts(repo string, issueType string, open int, closed int, openByAuthor map[string]int) {
+	tracked := 0
+	for author, count := range openByAuthor {
+		setIssueCount(repo, issueType, "open", author, count)
+		tracked += count
+	}
+
+	setIssueCount(repo, issueType, "open", "", max(open-tracked, 0))
+	setIssueCount(repo, issueType, "closed", "", closed)
+}
+
+func fetchOpenCountsByAuthor(ctx context.Context, client *github.Client, username string, authors []string, known map[string]bool) (map[repoIssueType]map[string]int, error) {
+	allowed := allowedAuthors(authors, username)
+	counts := map[repoIssueType]map[string]int{}
+
+	variables := map[string]any{
+		"q": "is:open archived:false user:" + username,
+	}
+
+	for {
+		var response graphQLOpenItemsResponse
+		if err := executeGraphQL(client, ctx, openItemsGraphQLQuery, variables, &response); err != nil {
+			return nil, err
+		}
+
+		for _, node := range response.Data.Search.Nodes {
+			var issueType string
+			switch node.Typename {
+			case "Issue":
+				issueType = "issue"
+			case "PullRequest":
+				issueType = "pull"
+			default:
+				continue
+			}
+
+			if !known[node.Repository.NameWithOwner] {
+				continue
+			}
+
+			author := normalizeAuthor(node.Author.Login, node.Author.Typename)
+			if author == "" || !allowed[strings.ToLower(author)] {
+				continue
+			}
+
+			key := repoIssueType{node.Repository.NameWithOwner, issueType}
+			if counts[key] == nil {
+				counts[key] = map[string]int{}
+			}
+			counts[key][author]++
+		}
+
+		pageInfo := response.Data.Search.PageInfo
+		if !pageInfo.HasNextPage || pageInfo.EndCursor == "" {
+			return counts, nil
+		}
+		variables["after"] = pageInfo.EndCursor
+	}
+}
+
+func parseAuthors(value string) []string {
+	var authors []string
+	for _, author := range strings.Split(value, ",") {
+		if author = strings.TrimSpace(author); author != "" {
+			authors = append(authors, author)
+		}
+	}
+	return authors
+}
+
+func allowedAuthors(authors []string, username string) map[string]bool {
+	allowed := make(map[string]bool, len(authors))
+	for _, author := range authors {
+		author = strings.TrimPrefix(author, "@")
+		if strings.EqualFold(author, "me") {
+			author = username
+		}
+		allowed[strings.ToLower(author)] = true
+	}
+	return allowed
+}
+
+func normalizeAuthor(login string, typename string) string {
+	if login == "" {
+		return ""
+	}
+	if typename == "Bot" {
+		return "app/" + login
+	}
+	return login
 }
 
 func fetchUserRepos(ctx context.Context, client *github.Client) ([]*github.Repository, error) {
@@ -599,6 +768,10 @@ func executeGraphQL(client *github.Client, ctx context.Context, query string, va
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("graphql request failed: %s", resp.Status)
+	}
 
 	return json.NewDecoder(resp.Body).Decode(response)
 }
