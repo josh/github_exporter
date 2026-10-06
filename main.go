@@ -132,7 +132,7 @@ func main() {
 
 	switch {
 	case args.Generate != nil:
-		if err := updateGitHubMetrics(client, ctx, authors); err != nil {
+		if err := updateGitHubMetrics(client, ctx, authors, workflowRunTracker{}); err != nil {
 			log.Fatalf("Error fetching metrics: %v", err)
 		}
 
@@ -168,15 +168,16 @@ func main() {
 		}
 
 	case args.Serve != nil:
+		tracker := workflowRunTracker{}
 		go func() {
 			log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
-			if err := updateGitHubMetrics(client, ctx, authors); err != nil {
+			if err := updateGitHubMetrics(client, ctx, authors, tracker); err != nil {
 				log.Printf("[%s] Error fetching metrics: %v", time.Now().Format(time.RFC3339), err)
 			}
 
 			for range time.Tick(args.Serve.Interval) {
 				log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
-				if err := updateGitHubMetrics(client, ctx, authors); err != nil {
+				if err := updateGitHubMetrics(client, ctx, authors, tracker); err != nil {
 					log.Printf("[%s] Error fetching GitHub metrics: %v", time.Now().Format(time.RFC3339), err)
 				}
 			}
@@ -251,8 +252,8 @@ func fetchGitHubToken() string {
 	return ""
 }
 
-func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []string) error {
-	g, ctx := errgroup.WithContext(ctx)
+func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []string, tracker workflowRunTracker) error {
+	var g errgroup.Group
 
 	g.Go(func() error {
 		if err := updateNotificationsMetrics(ctx, client); err != nil {
@@ -274,27 +275,11 @@ func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []s
 			return fmt.Errorf("fetching repos: %w", err)
 		}
 
-		repoGroup, ctx := errgroup.WithContext(ctx)
-
-		repoGroup.Go(func() error {
-			if err := updateRepoCountMetrics(ctx, repos); err != nil {
-				return fmt.Errorf("repo count metrics: %w", err)
-			}
-			return nil
-		})
-
-		for _, repo := range repos {
-			if repo.GetArchived() {
-				continue
-			}
-			repoGroup.Go(func() error {
-				if err := updateWorkflowRunMetrics(ctx, client, repo); err != nil {
-					return fmt.Errorf("workflow metrics for %s: %w", repo.GetFullName(), err)
-				}
-				return nil
-			})
+		if err := updateRepoCountMetrics(ctx, repos); err != nil {
+			return fmt.Errorf("repo count metrics: %w", err)
 		}
-		return repoGroup.Wait()
+
+		return tracker.update(ctx, client, repos)
 	})
 
 	return g.Wait()
@@ -694,12 +679,55 @@ type graphQLRequest struct {
 	Variables map[string]any `json:"variables"`
 }
 
-func updateWorkflowRunMetrics(ctx context.Context, client *github.Client, repo *github.Repository) error {
-	owner, repoName := repo.GetOwner().GetLogin(), repo.GetName()
+var workflowConclusions = []string{"action_required", "cancelled", "failure", "neutral",
+	"skipped", "stale", "startup_failure", "success", "timed_out"}
 
+type repoState struct {
+	branch string
+	known  map[int64]*github.WorkflowRun
+}
+
+// workflowRunTracker remembers the newest run seen per workflow so a stale
+// runs listing can never move a reported outcome backwards.
+type workflowRunTracker map[int64]*repoState
+
+func (t workflowRunTracker) update(ctx context.Context, client *github.Client, repos []*github.Repository) error {
+	var g errgroup.Group
+
+	for _, repo := range repos {
+		if repo.GetArchived() {
+			continue
+		}
+		s := t[repo.GetID()]
+		if s == nil {
+			s = &repoState{known: map[int64]*github.WorkflowRun{}}
+			t[repo.GetID()] = s
+		}
+		g.Go(func() error {
+			if err := s.update(ctx, client, repo); err != nil {
+				return fmt.Errorf("workflow metrics for %s: %w", repo.GetFullName(), err)
+			}
+			return nil
+		})
+	}
+
+	return g.Wait()
+}
+
+func (s *repoState) update(ctx context.Context, client *github.Client, repo *github.Repository) error {
+	owner, repoName := repo.GetOwner().GetLogin(), repo.GetName()
+	fullName, branch := repo.GetFullName(), repo.GetDefaultBranch()
+
+	if s.branch != "" && s.branch != branch {
+		workflowRunNumber.DeletePartialMatch(prometheus.Labels{"github_repo": fullName})
+		workflowRunState.DeletePartialMatch(prometheus.Labels{"github_repo": fullName})
+		s.known = map[int64]*github.WorkflowRun{}
+	}
+	s.branch = branch
+
+	// Filtering by status server-side returned staler listings than filtering here.
 	runs, _, err := client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repoName, &github.ListWorkflowRunsOptions{
-		Branch: repo.GetDefaultBranch(),
-		Status: "completed",
+		Branch: branch,
 		ListOptions: github.ListOptions{
 			PerPage: 100,
 		},
@@ -708,42 +736,45 @@ func updateWorkflowRunMetrics(ctx context.Context, client *github.Client, repo *
 		return err
 	}
 
-	latestRuns := make(map[int64]*github.WorkflowRun)
 	for _, run := range runs.WorkflowRuns {
-		workflowID := run.GetWorkflowID()
-		if existing, ok := latestRuns[workflowID]; !ok || run.GetRunNumber() > existing.GetRunNumber() {
-			latestRuns[workflowID] = run
+		if run.GetStatus() != "completed" {
+			continue
+		}
+		// Reruns keep their run number and bump the attempt.
+		id := run.GetWorkflowID()
+		if cur, ok := s.known[id]; !ok || run.GetRunNumber() > cur.GetRunNumber() ||
+			(run.GetRunNumber() == cur.GetRunNumber() && run.GetRunAttempt() > cur.GetRunAttempt()) {
+			s.known[id] = run
 		}
 	}
 
-	workflows, _, err := client.Actions.ListWorkflows(ctx, owner, repoName, &github.ListOptions{})
+	workflows, _, err := client.Actions.ListWorkflows(ctx, owner, repoName, &github.ListOptions{PerPage: 100})
 	if err != nil {
 		return err
 	}
 
 	for _, workflow := range workflows.Workflows {
-		if latestRun, ok := latestRuns[workflow.GetID()]; ok {
-			workflowRunNumber.With(prometheus.Labels{
-				"github_repo":   *repo.FullName,
-				"workflow_name": workflow.GetName(),
-			}).Set(float64(latestRun.GetRunNumber()))
+		latestRun, ok := s.known[workflow.GetID()]
+		if !ok {
+			continue
+		}
+		workflowRunNumber.With(prometheus.Labels{
+			"github_repo":   fullName,
+			"workflow_name": workflow.GetName(),
+		}).Set(float64(latestRun.GetRunNumber()))
 
-			conclusions := []string{"action_required", "cancelled", "failure", "neutral",
-				"skipped", "stale", "startup_failure", "success", "timed_out"}
-			for _, conclusion := range conclusions {
-				value := 0.0
-				if conclusion == latestRun.GetConclusion() {
-					value = 1.0
-				}
-				workflowRunState.With(prometheus.Labels{
-					"github_repo":                    *repo.FullName,
-					"workflow_name":                  workflow.GetName(),
-					"github_workflow_run_conclusion": conclusion,
-				}).Set(value)
+		for _, conclusion := range workflowConclusions {
+			value := 0.0
+			if conclusion == latestRun.GetConclusion() {
+				value = 1.0
 			}
+			workflowRunState.With(prometheus.Labels{
+				"github_repo":                    fullName,
+				"workflow_name":                  workflow.GetName(),
+				"github_workflow_run_conclusion": conclusion,
+			}).Set(value)
 		}
 	}
-
 	return nil
 }
 
