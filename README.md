@@ -5,6 +5,8 @@ A Prometheus exporter that collects metrics from GitHub, including:
 - Issue and pull request counts
 - Notification counts
 - Workflow run states and numbers
+- API rate limit usage, per GitHub resource
+- Exporter health: last successful update and error count per source (`notifications`, `issues`, `workflows`)
 
 ## Usage
 

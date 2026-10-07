@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/alexflint/go-arg"
 	"github.com/google/go-github/v68/github"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/push"
 	"github.com/prometheus/common/expfmt"
@@ -66,13 +68,55 @@ var (
 		},
 		[]string{"github_repo", "workflow_name", "github_workflow_run_conclusion"},
 	)
+
+	lastSuccess = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_exporter_last_success_timestamp_seconds",
+			Help: "Unix time of the last successful update for each metrics source.",
+		},
+		[]string{"source"},
+	)
+
+	updateErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "github_exporter_errors_total",
+			Help: "The number of failed updates for each metrics source.",
+		},
+		[]string{"source"},
+	)
+
+	rateLimitLimit = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_rate_limit_limit",
+			Help: "The GitHub API request limit from the most recent response.",
+		},
+		[]string{"resource"},
+	)
+
+	rateLimitRemaining = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_rate_limit_remaining",
+			Help: "The GitHub API requests remaining from the most recent response.",
+		},
+		[]string{"resource"},
+	)
+
+	rateLimitReset = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "github_rate_limit_reset_timestamp_seconds",
+			Help: "Unix time when the GitHub API rate limit window resets.",
+		},
+		[]string{"resource"},
+	)
 )
 
 func init() {
-	registry.MustRegister(repoCount)
-	registry.MustRegister(notificationCount)
-	registry.MustRegister(workflowRunNumber)
-	registry.MustRegister(workflowRunState)
+	registry.MustRegister(repoCount, notificationCount, workflowRunNumber, workflowRunState,
+		lastSuccess, updateErrors, rateLimitLimit, rateLimitRemaining, rateLimitReset)
+
+	for _, source := range []string{"notifications", "issues", "workflows"} {
+		updateErrors.WithLabelValues(source)
+	}
 }
 
 type generateCommand struct {
@@ -122,6 +166,7 @@ func main() {
 		&oauth2.Token{AccessToken: args.Token},
 	)
 	httpClient := oauth2.NewClient(ctx, ts)
+	httpClient.Transport = &rateLimitRoundTripper{wrapped: httpClient.Transport}
 	if args.Verbose {
 		httpClient.Transport = &loggingRoundTripper{wrapped: httpClient.Transport}
 	}
@@ -168,6 +213,8 @@ func main() {
 		}
 
 	case args.Serve != nil:
+		registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
 		tracker := workflowRunTracker{}
 		go func() {
 			log.Printf("[%s] Updating GitHub metrics", time.Now().Format(time.RFC3339))
@@ -228,6 +275,34 @@ func (l loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return l.wrapped.RoundTrip(req)
 }
 
+type rateLimitRoundTripper struct {
+	wrapped http.RoundTripper
+}
+
+func (r rateLimitRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := r.wrapped.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+
+	resource := resp.Header.Get("X-RateLimit-Resource")
+	if resource == "" {
+		return resp, nil
+	}
+
+	for header, gauge := range map[string]*prometheus.GaugeVec{
+		"X-RateLimit-Limit":     rateLimitLimit,
+		"X-RateLimit-Remaining": rateLimitRemaining,
+		"X-RateLimit-Reset":     rateLimitReset,
+	} {
+		if value, err := strconv.ParseFloat(resp.Header.Get(header), 64); err == nil {
+			gauge.WithLabelValues(resource).Set(value)
+		}
+	}
+
+	return resp, nil
+}
+
 func fetchGitHubToken() string {
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		return token
@@ -255,21 +330,21 @@ func fetchGitHubToken() string {
 func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []string, tracker workflowRunTracker) error {
 	var g errgroup.Group
 
-	g.Go(func() error {
+	g.Go(trackSource("notifications", func() error {
 		if err := updateNotificationsMetrics(ctx, client); err != nil {
 			return fmt.Errorf("notifications metrics: %w", err)
 		}
 		return nil
-	})
+	}))
 
-	g.Go(func() error {
+	g.Go(trackSource("issues", func() error {
 		if err := updateIssueMetrics(ctx, client, authors); err != nil {
 			return fmt.Errorf("issue metrics: %w", err)
 		}
 		return nil
-	})
+	}))
 
-	g.Go(func() error {
+	g.Go(trackSource("workflows", func() error {
 		repos, err := fetchUserRepos(ctx, client)
 		if err != nil {
 			return fmt.Errorf("fetching repos: %w", err)
@@ -280,9 +355,20 @@ func updateGitHubMetrics(client *github.Client, ctx context.Context, authors []s
 		}
 
 		return tracker.update(ctx, client, repos)
-	})
+	}))
 
 	return g.Wait()
+}
+
+func trackSource(source string, update func() error) func() error {
+	return func() error {
+		if err := update(); err != nil {
+			updateErrors.WithLabelValues(source).Inc()
+			return err
+		}
+		lastSuccess.WithLabelValues(source).SetToCurrentTime()
+		return nil
+	}
 }
 
 const issuesGraphQLQuery = `
