@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/alexflint/go-arg"
-	"github.com/google/go-github/v68/github"
+	"github.com/google/go-github/v93/github"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -170,7 +170,10 @@ func main() {
 	if args.Verbose {
 		httpClient.Transport = &loggingRoundTripper{wrapped: httpClient.Transport}
 	}
-	client := github.NewClient(httpClient)
+	client, err := github.NewClient(github.WithHTTPClient(httpClient))
+	if err != nil {
+		log.Fatalf("Error creating GitHub client: %v", err)
+	}
 
 	authors := parseAuthors(args.Authors)
 	registerIssueCount(len(authors) > 0)

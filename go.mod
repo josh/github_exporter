@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	github.com/alexflint/go-arg v1.6.1
-	github.com/google/go-github/v68 v68.0.0
 	github.com/google/go-github/v93 v93.0.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/common v0.73.1
